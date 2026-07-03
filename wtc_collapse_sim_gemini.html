@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WTC Progressive Collapse Sensitivity Ensemble</title>
+    <!-- Chart.js for responsive diagrams -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f6f9;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            background-color: #1e293b;
+            color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        header h1 { margin: 0; font-size: 24px; }
+        header p { margin: 5px 0 0 0; color: #94a3b8; font-size: 14px; }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 20px;
+        }
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+        .panel {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+        }
+        .panel h2 { margin-top: 0; font-size: 18px; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px; }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            font-size: 13px;
+            margin-bottom: 5px;
+        }
+        .stats-box {
+            background: #f1f5f9;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        .stats-val {
+            font-size: 24px;
+            font-weight: bold;
+            color: #0f172a;
+        }
+        .btn {
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.2s;
+        }
+        .btn:hover { background-color: #1d4ed8; }
+        .chart-container {
+            position: relative;
+            margin-bottom: 20px;
+            height: 280px;
+        }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 750px) {
+            .charts-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>WTC Progressive Collapse Sensitivity Ensemble</h1>
+        <p>Monte Carlo simulation implementing the Schneider (2017) / Bažant-Zhou (2002) floor-by-floor energy balance model.</p>
+    </header>
+
+    <div class="grid">
+        <!-- Controls Column -->
+        <div class="panel">
+            <h2>Simulation Controls</h2>
+            <div class="control-group">
+                <label for="sampleSize">Monte Carlo Samples</label>
+                <input type="number" id="sampleSize" class="control-group" value="2000" min="100" max="10000" style="width: 100%; padding: 8px; box-sizing: border-box; border-radius:4px; border:1px solid #cbd5e1;">
+            </div>
+            <button class="btn" id="runBtn">Run Simulation Engine</button>
+
+            <div class="stats-box">
+                <div>Overall Arrest Probability</div>
+                <div class="stats-val" id="arrestProb">0.0%</div>
+            </div>
+            
+            <div style="margin-top:20px; font-size:12px; color:#64748b; line-height: 1.5;">
+                <strong>Model Note:</strong> Parameters are drawn from standard literature uniform distributions: 
+                $M_0 \in [30, 58]\times10^6\text{ kg}$, $E_{abs} \in [250, 2000]\text{ MJ}$, $\alpha \in [0.52, 1.0]$, 
+                $\lambda \in [0.15, 0.22]$, $f_{shed} \in [0, 0.5]$, and $CV_E \in [0, 0.4]$. Linear structural resistance taper is fixed at $2.5\times$ down the tower core.
+            </div>
+        </div>
+
+        <!-- Visuals Column -->
+        <div class="panel">
+            <h2>Ensemble Diagrams</h2>
+            <div class="charts-grid">
+                <div class="chart-container">
+                    <canvas id="histChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <canvas id="sensChart"></canvas>
+                </div>
+            </div>
+            <div class="charts-grid">
+                <div class="chart-container">
+                    <canvas id="sweepChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <canvas id="scatterChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// --- Math and Sampling Helpers ---
+function randomUniform(min, max) {
+    return Math.random() * (max - min) + min;
+}
+
+function randomLognormal(mu, sigma) {
+    // Box-Muller transform for normal distribution
+    let u1 = Math.random();
+    let u2 = Math.random();
+    if(u1 === 0) u1 = 0.0001; 
+    let z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    return Math.exp(mu + sigma * z0);
+}
+
+function pearsonCorrelation(x, y) {
+    let n = x.length;
+    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+    for (let i = 0; i < n; i++) {
+        sumX += x[i];
+        sumY += y[i];
+        sumXY += x[i] * y[i];
+        sumX2 += x[i] * x[i];
+        sumY2 += y[i] * y[i];
+    }
+    let num = (n * sumXY) - (sumX * sumY);
+    let den = Math.sqrt(((n * sumX2) - (sumX * sumX)) * ((n * sumY2) - (sumY * sumY)));
+    return den === 0 ? 0 : num / den;
+}
+
+// --- Core Simulator Engine ---
+function runSim(p) {
+    const g = 9.81;
+    const h_eff = p.h * (1.0 - p.lambda_);
+    const taper_factor = 2.5;
+    
+    let M_eff = p.M0;
+    let v0_sq = 2 * p.alpha * g * h_eff;
+    let v = Math.sqrt(Math.max(v0_sq, 0.0));
+    
+    let arrested = false;
+    let floors_crushed = 0;
+    
+    for (let k = 0; k < p.n_lower; k++) {
+        let taper = 1.0 + (taper_factor - 1.0) * k / Math.max(p.n_lower - 1, 1);
+        let E_floor_MJ = p.E_abs_MJ * taper;
+        
+        if (p.E_abs_cv > 0) {
+            let sigma_log = Math.sqrt(Math.log(1 + p.E_abs_cv * p.E_abs_cv));
+            let mu_log = -0.5 * sigma_log * sigma_log;
+            E_floor_MJ *= randomLognormal(mu_log, sigma_log);
+        }
+        
+        let E_diss = E_floor_MJ * 1e6; // Convert to Joules
+        
+        // Inelastic Impact Dynamics
+        let M_new = M_eff + p.m_floor;
+        let v_after = (M_eff / M_new) * v;
+        
+        // Dynamic Mass Shedding
+        let M_shed = p.shed_frac * p.m_floor;
+        let M_eff_new = M_new - M_shed;
+        
+        // Energy Balance Verification
+        let E_kinetic = 0.5 * M_eff_new * v_after * v_after;
+        let E_gravity = M_eff_new * g * h_eff;
+        let E_total_available = E_kinetic + E_gravity;
+        
+        floors_crushed++;
+        
+        if (E_diss >= E_total_available) {
+            arrested = true;
+            break;
+        } else {
+            let E_residual = E_total_available - E_diss;
+            v = Math.sqrt(2 * E_residual / M_eff_new);
+            M_eff = M_eff_new;
+        }
+    }
+    
+    return { arrested, floors_crushed };
+}
+
+// --- Global Chart Instances ---
+let charts = {};
+
+function initCharts() {
+    const ctxHist = document.getElementById('histChart').getContext('2d');
+    charts.hist = new Chart(ctxHist, {
+        type: 'bar',
+        data: { labels: [], datasets: [{ label: 'Collapse Stop Distribution', data: [], backgroundColor: '#60a5fa' }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'Floors Crushed Histogram' } } }
+    });
+
+    const ctxSens = document.getElementById('sensChart').getContext('2d');
+    charts.sens = new Chart(ctxSens, {
+        type: 'bar',
+        data: { labels: [], datasets: [{ label: 'Pearson Correlation (r)', data: [], backgroundColor: '#f87171' }] },
+        options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'Parameter Sensitivity Analysis' } } }
+    });
+
+    const ctxSweep = document.getElementById('sweepChart').getContext('2d');
+    charts.sweep = new Chart(ctxSweep, {
+        type: 'line',
+        data: { labels: [], datasets: [{ label: 'Arrest Prob %', data: [], borderColor: '#34d399', fill: false }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'Arrest Probability vs Nominal E_abs' } } }
+    });
+
+    const ctxScatter = document.getElementById('scatterChart').getContext('2d');
+    charts.scatter = new Chart(ctxScatter, {
+        type: 'scatter',
+        data: { datasets: [
+            { label: 'Arrested', data: [], backgroundColor: '#10b981' },
+            { label: 'Total Collapse', data: [], backgroundColor: '#ef4444' }
+        ]},
+        options: { 
+            responsive: true, 
+            maintainAspectRatio: false, 
+            plugins: { title: { display: true, text: 'Parameter Space (E_abs vs M0)' } },
+            scales: { x: { title: { display: true, text: 'E_abs (MJ)' } }, y: { title: { display: true, text: 'M0 (x10^6 kg)' } } }
+        }
+    });
+}
+
+function runEnsemblePipeline() {
+    const nSamples = parseInt(document.getElementById('sampleSize').value) || 2000;
+    
+    let paramArrays = { M0: [], m_over_M: [], E_abs_MJ: [], alpha: [], lambda_: [], shed_frac: [], E_abs_cv: [] };
+    let outcomes = [];
+    let arrestsCount = 0;
+    
+    // 1. Generate Parameters and Execute Runs
+    for (let i = 0; i < nSamples; i++) {
+        let M0 = randomUniform(30e6, 58e6);
+        let m_over_M = randomUniform(0.063, 0.10);
+        let E_abs_MJ = randomUniform(250, 2000);
+        let alpha = randomUniform(0.52, 1.0);
+        let lambda_ = randomUniform(0.15, 0.22);
+        let shed_frac = randomUniform(0.0, 0.5);
+        let E_abs_cv = randomUniform(0.0, 0.4);
+        
+        paramArrays.M0.push(M0);
+        paramArrays.m_over_M.push(m_over_M);
+        paramArrays.E_abs_MJ.push(E_abs_MJ);
+        paramArrays.alpha.push(alpha);
+        paramArrays.lambda_.push(lambda_);
+        paramArrays.shed_frac.push(shed_frac);
+        paramArrays.E_abs_cv.push(E_abs_cv);
+        
+        let p = { M0, m_floor: M0 * m_over_M, h: 3.8, n_lower: 97, E_abs_MJ, alpha, lambda_, shed_frac, E_abs_cv };
+        let res = runSim(p);
+        outcomes.push(res);
+        if (res.arrested) arrestsCount++;
+    }
+    
+    // Update Stats Display
+    const arrestRate = (arrestsCount / nSamples) * 100;
+    document.getElementById('arrestProb').innerText = arrestRate.toFixed(1) + '%';
+    
+    // 2. Compute Histogram
+    let histBins = new Array(98).fill(0);
+    outcomes.forEach(o => { histBins[o.floors_crushed]++; });
+    
+    charts.hist.data.labels = Array.from({length: 98}, (_, i) => i);
+    charts.hist.data.datasets[0].data = histBins;
+    charts.hist.update();
+    
+    // 3. Compute Sensitivity (Pearson r)
+    let floorsCrushedArr = outcomes.map(o => o.floors_crushed);
+    let sensLabels = ['E_abs_MJ', 'M0', 'm_over_M', 'alpha', 'lambda_', 'shed_frac', 'E_abs_cv'];
+    let sensValues = sensLabels.map(key => pearsonCorrelation(paramArrays[key], floorsCrushedArr));
+    
+    charts.sens.data.labels = sensLabels;
+    charts.sens.data.datasets[0].data = sensValues;
+    charts.sens.update();
+    
+    // 4. Parameter Space Scatter Map
+    let arrestedPoints = [];
+    let collapsedPoints = [];
+    const maxScatterPoints = 800; // Cap to keep charts high performance
+    for (let i = 0; i < Math.min(nSamples, maxScatterPoints); i++) {
+        let pt = { x: paramArrays.E_abs_MJ[i], y: paramArrays.M0[i] / 1e6 };
+        if (outcomes[i].arrested) arrestedPoints.push(pt);
+        else collapsedPoints.push(pt);
+    }
+    charts.scatter.data.datasets[0].data = arrestedPoints;
+    charts.scatter.data.datasets[1].data = collapsedPoints;
+    charts.scatter.update();
+
+    // 5. Compute Deterministic Isolated Parameter Sweep for E_abs
+    let sweepE = [];
+    let sweepProb = [];
+    for (let e = 250; e <= 2000; e += 100) {
+        sweepE.push(e);
+        let cleanArrests = 0;
+        let sweepIterations = 200;
+        for (let j = 0; j < sweepIterations; j++) {
+            let pClean = { M0: 33e6, m_floor: 2.54e6, h: 3.8, n_lower: 97, E_abs_MJ: e, alpha: 1.0, lambda_: 0.18, shed_frac: 0.0, E_abs_cv: randomUniform(0.0, 0.4) };
+            if (runSim(pClean).arrested) cleanArrests++;
+        }
+        sweepProb.push((cleanArrests / sweepIterations) * 100);
+    }
+    charts.sweep.data.labels = sweepE;
+    charts.sweep.data.datasets[0].data = sweepProb;
+    charts.sweep.update();
+}
+
+// Window Initializer
+window.onload = function() {
+    initCharts();
+    runEnsemblePipeline();
+    document.getElementById('runBtn').onclick = runEnsemblePipeline;
+};
+</script>
+</body>
+</html>

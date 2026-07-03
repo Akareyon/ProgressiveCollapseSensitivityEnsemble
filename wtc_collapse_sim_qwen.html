@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WTC Progressive Collapse Sensitivity Ensemble</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; }
+        .btn-primary { background-color: #2563eb; transition: all 0.2s; }
+        .btn-primary:hover { background-color: #1d4ed8; }
+        .btn-primary:disabled { background-color: #475569; cursor: not-allowed; }
+        .progress-bar { transition: width 0.3s ease; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <header class="max-w-7xl mx-auto mb-8">
+        <h1 class="text-3xl font-bold text-blue-400">WTC Progressive Collapse Sensitivity Ensemble</h1>
+        <p class="text-slate-400 mt-2">Monte Carlo simulation implementing the Schneider (2017) / Bažant-Zhou (2002) floor-by-floor energy balance model.</p>
+    </header>
+
+    <main class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-6">
+        
+        <!-- Control Panel -->
+        <div class="lg:col-span-1 card p-6 h-fit sticky top-4">
+            <h2 class="text-xl font-semibold mb-4 text-blue-300">Simulation Controls</h2>
+            
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-slate-300 mb-1">Monte Carlo Samples</label>
+                <select id="nSamples" class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-slate-200">
+                    <option value="1000">1,000 (Fast)</option>
+                    <option value="5000" selected>5,000 (Standard)</option>
+                    <option value="10000">10,000 (High Accuracy)</option>
+                    <option value="25000">25,000 (Deep Analysis)</option>
+                </select>
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-slate-300 mb-1">Random Seed</label>
+                <input type="number" id="seed" value="42" class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-slate-200">
+            </div>
+
+            <button id="runBtn" class="w-full btn-primary text-white font-bold py-3 rounded-md shadow-lg">
+                Run Simulation Engine
+            </button>
+
+            <div class="mt-4">
+                <div class="flex justify-between text-xs text-slate-400 mb-1">
+                    <span>Progress</span>
+                    <span id="progressText">0%</span>
+                </div>
+                <div class="w-full bg-slate-800 rounded-full h-2.5">
+                    <div id="progressBar" class="bg-blue-500 h-2.5 rounded-full progress-bar" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="mt-6 p-4 bg-slate-800 rounded-lg border border-slate-700">
+                <h3 class="text-sm font-bold text-yellow-400 mb-2">Overall Arrest Probability</h3>
+                <p id="arrestProb" class="text-3xl font-mono text-green-400">0.0%</p>
+                <p class="text-xs text-slate-500 mt-1">Based on literature uniform distributions.</p>
+            </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="lg:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="card p-4">
+                <h3 class="text-lg font-semibold mb-2 text-slate-200">Cumulative Arrest Probability</h3>
+                <canvas id="chartArrest"></canvas>
+            </div>
+            <div class="card p-4">
+                <h3 class="text-lg font-semibold mb-2 text-slate-200">Sensitivity Analysis (Pearson |r|)</h3>
+                <canvas id="chartSensitivity"></canvas>
+            </div>
+            <div class="card p-4">
+                <h3 class="text-lg font-semibold mb-2 text-slate-200">E_abs Threshold Sweep</h3>
+                <canvas id="chartSweep"></canvas>
+            </div>
+            <div class="card p-4">
+                <h3 class="text-lg font-semibold mb-2 text-slate-200">Parameter Space (E_abs vs M0)</h3>
+                <canvas id="chartScatter"></canvas>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // ==========================================
+        // 1. MATH & RANDOM NUMBER GENERATION
+        // ==========================================
+        function mulberry32(a) {
+            return function() {
+                var t = a += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            }
+        }
+
+        function normalRandom(rng) {
+            let u = 0, v = 0;
+            while(u === 0) u = rng();
+            while(v === 0) v = rng();
+            return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+        }
+
+        function uniform(rng, min, max) {
+            return min + rng() * (max - min);
+        }
+
+        function pearsonCorrelation(x, y) {
+            const n = x.length;
+            let sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0, sum_y2 = 0;
+            for (let i = 0; i < n; i++) {
+                sum_x += x[i]; sum_y += y[i];
+                sum_xy += x[i] * y[i];
+                sum_x2 += x[i] * x[i]; sum_y2 += y[i] * y[i];
+            }
+            let num = n * sum_xy - sum_x * sum_y;
+            let den = Math.sqrt((n * sum_x2 - sum_x * sum_x) * (n * sum_y2 - sum_y * sum_y));
+            return den === 0 ? 0 : num / den;
+        }
+
+        // ==========================================
+        // 2. PHYSICS ENGINE (Bažant-Zhou / Schneider)
+        // ==========================================
+        const G = 9.81;
+        const H = 3.8;
+        const N_LOWER = 97;
+        const TAPER_FACTOR = 2.5;
+
+        function runSim(params, rng) {
+            const h_eff = H * (1 - params.lambda_);
+            let M = params.M0;
+            let v = Math.sqrt(Math.max(0, 2 * params.alpha * G * h_eff));
+            let floors_crushed = 0;
+            let arrested = false;
+
+            const log_std = params.CV_E > 0 ? Math.sqrt(Math.log(1 + params.CV_E * params.CV_E)) : 0;
+            const mu_log = params.CV_E > 0 ? -0.5 * log_std * log_std : 0;
+
+            for (let k = 0; k < N_LOWER; k++) {
+                // Floor energy capacity with taper and heterogeneity
+                let taper = 1 + (TAPER_FACTOR - 1) * (k / (N_LOWER - 1));
+                let E_abs_k = params.E_abs * taper * 1e6; // Joules
+                if (params.CV_E > 0) {
+                    E_abs_k *= Math.exp(mu_log + log_std * normalRandom(rng));
+                }
+
+                // Inelastic impact & shedding
+                let m_accreted = params.m_floor;
+                let M_temp = M + m_accreted;
+                let v_after_impact = (M / M_temp) * v;
+                let M_shed = params.f_shed * m_accreted;
+                let M_new = M_temp - M_shed;
+
+                // Energy balance
+                let E_kinetic = 0.5 * M_new * v_after_impact * v_after_impact;
+                let E_gravity = M_new * G * h_eff;
+                let E_avail = E_kinetic + E_gravity;
+
+                floors_crushed++;
+
+                if (E_avail <= E_abs_k) {
+                    arrested = true;
+                    break;
+                }
+
+                let E_residual = E_avail - E_abs_k;
+                v = Math.sqrt(2 * E_residual / M_new);
+                M = M_new;
+            }
+            return { arrested, floors_crushed };
+        }
+
+        // ==========================================
+        // 3. ENSEMBLE RUNNER & ANALYSIS
+        // ==========================================
+        async function runEnsemble(nSamples, seed, progressCallback) {
+            const rng = mulberry32(seed);
+            
+            // Storage for results
+            let arrestByFloor = new Array(N_LOWER + 1).fill(0);
+            let totalArrested = 0;
+            let paramData = { M0: [], m_floor: [], E_abs: [], alpha: [], lambda_: [], f_shed: [], CV_E: [] };
+            let outcomes = [];
+            let scatterData = [];
+
+            const chunkSize = 500; // Yield to UI thread every 500 samples
+            let processed = 0;
+
+            while (processed < nSamples) {
+                let end = Math.min(processed + chunkSize, nSamples);
+                for (let i = processed; i < end; i++) {
+                    // Sample parameters from literature ranges
+                    const M0 = uniform(rng, 30e6, 58e6);
+                    const m_ratio = uniform(rng, 0.063, 0.10);
+                    const p = {
+                        M0: M0,
+                        m_floor: M0 * m_ratio,
+                        E_abs: uniform(rng, 250, 2000),
+                        alpha: uniform(rng, 0.52, 1.0),
+                        lambda_: uniform(rng, 0.15, 0.22),
+                        f_shed: uniform(rng, 0.0, 0.50),
+                        CV_E: uniform(rng, 0.0, 0.40)
+                    };
+
+                    const res = runSim(p, rng);
+                    
+                    if (res.arrested) {
+                        totalArrested++;
+                        arrestByFloor[res.floors_crushed]++;
+                    }
+                    
+                    outcomes.push(res.floors_crushed);
+                    paramData.M0.push(p.M0 / 1e6);
+                    paramData.m_floor.push(p.m_floor / 1e6);
+                    paramData.E_abs.push(p.E_abs);
+                    paramData.alpha.push(p.alpha);
+                    paramData.lambda_.push(p.lambda_);
+                    paramData.f_shed.push(p.f_shed);
+                    paramData.CV_E.push(p.CV_E);
+                    
+                    scatterData.push({ x: p.E_abs, y: p.M0 / 1e6, arrested: res.arrested });
+                }
+                processed = end;
+                progressCallback(processed / nSamples);
+                await new Promise(r => setTimeout(r, 0)); // Yield to UI
+            }
+
+            // Calculate Cumulative Arrest Probability
+            let cumArrest = [];
+            let cumSum = 0;
+            for (let i = 0; i <= N_LOWER; i++) {
+                cumSum += arrestByFloor[i];
+                cumArrest.push((cumSum / nSamples) * 100);
+            }
+
+            // Sensitivity Analysis (Pearson r)
+            let correlations = {};
+            for (let key in paramData) {
+                correlations[key] = Math.abs(pearsonCorrelation(paramData[key], outcomes));
+            }
+
+            return {
+                arrestProb: (totalArrested / nSamples) * 100,
+                cumArrest,
+                correlations,
+                scatterData,
+                nSamples
+            };
+        }
+
+        async function runSweep(eAbsValues, nPerPoint, seed) {
+            const rng = mulberry32(seed + 999);
+            let probs = [];
+            for (let E of eAbsValues) {
+                let arrests = 0;
+                for (let i = 0; i < nPerPoint; i++) {
+                    const p = {
+                        M0: 44e6, m_floor: 44e6 * 0.08, E_abs: E,
+                        alpha: 0.76, lambda_: 0.185, f_shed: 0.25, CV_E: 0.2
+                    };
+                    if (runSim(p, rng).arrested) arrests++;
+                }
+                probs.push((arrests / nPerPoint) * 100);
+            }
+            return probs;
+        }
+
+        // ==========================================
+        // 4. UI & CHART RENDERING
+        // ==========================================
+        const charts = {};
+        const chartColors = {
+            blue: 'rgba(59, 130, 246, 0.8)',
+            green: 'rgba(34, 197, 94, 0.8)',
+            red: 'rgba(239, 68, 68, 0.8)',
+            yellow: 'rgba(234, 179, 8, 0.8)',
+            grid: 'rgba(148, 163, 184, 0.1)'
+        };
+
+        function initCharts() {
+            const defaults = {
+                color: '#94a3b8',
+                borderColor: chartColors.grid,
+                font: { family: 'Inter' }
+            };
+            Chart.defaults.color = defaults.color;
+            Chart.defaults.borderColor = defaults.borderColor;
+
+            charts.arrest = new Chart(document.getElementById('chartArrest'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Cumulative Arrest Prob (%)', data: [], borderColor: chartColors.green, backgroundColor: 'rgba(34, 197, 94, 0.1)', fill: true, tension: 0.3 }] },
+                options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { title: { display: true, text: 'Floor Number' } }, y: { title: { display: true, text: 'Probability (%)' }, min: 0, max: 100 } } }
+            });
+
+            charts.sensitivity = new Chart(document.getElementById('chartSensitivity'), {
+                type: 'bar',
+                data: { labels: [], datasets: [{ label: '|Pearson r|', data: [], backgroundColor: [] }] },
+                options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { title: { display: true, text: 'Correlation with Floors Crushed' }, min: 0, max: 1 } } }
+            });
+
+            charts.sweep = new Chart(document.getElementById('chartSweep'), {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Arrest Prob (%)', data: [], borderColor: chartColors.yellow, backgroundColor: 'rgba(234, 179, 8, 0.1)', fill: true, tension: 0.2 }] },
+                options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { title: { display: true, text: 'E_abs (MJ)' } }, y: { title: { display: true, text: 'Probability (%)' }, min: 0, max: 100 } } }
+            });
+
+            charts.scatter = new Chart(document.getElementById('chartScatter'), {
+                type: 'scatter',
+                data: { datasets: [{ label: 'Arrested', data: [], backgroundColor: chartColors.green, pointRadius: 3 }, { label: 'Collapsed', data: [], backgroundColor: chartColors.red, pointRadius: 3 }] },
+                options: { responsive: true, scales: { x: { title: { display: true, text: 'E_abs (MJ)' } }, y: { title: { display: true, text: 'M0 (×10⁶ kg)' } } } }
+            });
+        }
+
+        function updateCharts(results, sweepData, eAbsValues) {
+            // 1. Arrest Curve
+            charts.arrest.data.labels = Array.from({length: N_LOWER + 1}, (_, i) => i);
+            charts.arrest.data.datasets[0].data = results.cumArrest;
+            charts.arrest.update();
+
+            // 2. Sensitivity
+            const sortedSens = Object.entries(results.correlations).sort((a, b) => b[1] - a[1]);
+            charts.sensitivity.data.labels = sortedSens.map(s => s[0]);
+            charts.sensitivity.data.datasets[0].data = sortedSens.map(s => s[1]);
+            charts.sensitivity.data.datasets[0].backgroundColor = sortedSens.map(s => s[0] === 'E_abs' ? chartColors.yellow : chartColors.blue);
+            charts.sensitivity.update();
+
+            // 3. Sweep
+            charts.sweep.data.labels = eAbsValues;
+            charts.sweep.data.datasets[0].data = sweepData;
+            charts.sweep.update();
+
+            // 4. Scatter
+            const arrestedPts = results.scatterData.filter(d => d.arrested).map(d => ({x: d.x, y: d.y}));
+            const collapsedPts = results.scatterData.filter(d => !d.arrested).map(d => ({x: d.x, y: d.y}));
+            // Limit scatter points for performance if > 5000
+            const limit = 5000;
+            charts.scatter.data.datasets[0].data = arrestedPts.slice(0, limit);
+            charts.scatter.data.datasets[1].data = collapsedPts.slice(0, limit);
+            charts.scatter.update();
+        }
+
+        // ==========================================
+        // 5. EVENT LISTENERS
+        // ==========================================
+        document.getElementById('runBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('runBtn');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            const arrestProbEl = document.getElementById('arrestProb');
+            
+            btn.disabled = true;
+            btn.innerText = "Simulating...";
+            progressBar.style.width = '0%';
+            progressText.innerText = '0%';
+
+            const nSamples = parseInt(document.getElementById('nSamples').value);
+            const seed = parseInt(document.getElementById('seed').value);
+
+            try {
+                const results = await runEnsemble(nSamples, seed, (progress) => {
+                    const pct = Math.round(progress * 100);
+                    progressBar.style.width = `${pct}%`;
+                    progressText.innerText = `${pct}%`;
+                });
+
+                arrestProbEl.innerText = `${results.arrestProb.toFixed(2)}%`;
+                arrestProbEl.className = results.arrestProb > 10 ? "text-3xl font-mono text-green-400" : "text-3xl font-mono text-red-400";
+
+                // Run Sweep (fast, synchronous but small)
+                const eAbsValues = Array.from({length: 20}, (_, i) => 250 + i * (1750 / 19));
+                const sweepData = await runSweep(eAbsValues, 500, seed);
+
+                updateCharts(results, sweepData, eAbsValues);
+
+            } catch (e) {
+                console.error(e);
+                alert("Simulation error. Check console.");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Run Simulation Engine";
+            }
+        });
+
+        // Initialize
+        initCharts();
+    </script>
+</body>
+</html>
