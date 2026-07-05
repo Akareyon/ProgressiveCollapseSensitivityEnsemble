@@ -85,6 +85,13 @@ class CollapseParams:
     # We model E_abs as varying floor-by-floor with this CV around E_abs_MJ.
     E_abs_cv: float = 0.0      # 0 = uniform; 0.3 = 30% std dev
 
+    # Column capacity taper factor: ratio of base-floor to initiation-zone
+    # dissipation capacity, applied as a linear ramp across n_lower floors.
+    # Rough estimate from NIST column schedule data (heavier sections lower
+    # in the tower). Active throughout the main ensemble (Section 4).
+    # Set to 1.0 to disable tapering -- e.g. to validate the closed-form
+    # Schneider (2017) formula, which assumes spatially uniform capacity.
+    taper_factor: float = 2.5
 
 def make_param_distributions(n_samples: int, seed: int = 42) -> list[CollapseParams]:
     """
@@ -175,13 +182,11 @@ def run_sim(p: CollapseParams, rng: Optional[np.random.Generator] = None) -> Sim
     # We use a simple linear taper: E_abs increases by factor taper_factor
     # over the full height of the lower structure. This is a model assumption.
     # We apply it multiplicatively on top of the drawn E_abs_MJ.
-    taper_factor = 2.5   # lower floor columns ~2.5× heavier than initiation zone
-                         # (rough estimate from NIST column schedule data)
 
     # Generate per-floor dissipation capacities
     n_floors = p.n_lower
     E_base = np.array([
-        p.E_abs_MJ * (1.0 + (taper_factor - 1.0) * k / max(n_floors - 1, 1))
+        p.E_abs_MJ * (1.0 + (p.taper_factor - 1.0) * k / max(n_floors - 1, 1))
         for k in range(n_floors)
     ])  # MJ, increasing toward base
 
